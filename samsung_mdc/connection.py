@@ -37,17 +37,25 @@ def _normalize_cmd(
 def pack_payload(
     cmd: Union[int, Tuple[int], Tuple[int, Union[int, None]]],
     display_id: int,
-    data: Union[bytes, Sequence] = b''
+    data: Union[bytes, Sequence] = b'',
+    data_length_large: bool = False
 ):
     cmd, subcmd = _normalize_cmd(cmd)
     data = bytes(data)
     if subcmd is not None:
         data = bytes([subcmd]) + data
 
-    payload = (
-        bytes([HEADER_CODE, cmd, display_id, len(data)])
-        + bytes(data)
-    )
+    if data_length_large:
+        payload = (
+            bytes([HEADER_CODE, cmd, display_id])
+            + len(data).to_bytes(2, 'big')
+            + bytes(data)
+        )
+    else:
+        payload = (
+            bytes([HEADER_CODE, cmd, display_id, len(data)])
+            + bytes(data)
+        )
     payload += bytes([get_checksum(payload[1:])])
     return payload
 
@@ -218,10 +226,14 @@ class MDCConnection:
         self,
         cmd: Union[int, Tuple[int], Tuple[int, int]],
         display_id: int,
-        data: Union[bytes, Sequence] = b''
+        data: Union[bytes, Sequence] = b'',
+        data_length_large: bool = False,
+        response_length_large: bool = False
     ):
         cmd, subcmd = _normalize_cmd(cmd)
-        payload = pack_payload((cmd, subcmd), display_id, data)
+        payload = pack_payload(
+            (cmd, subcmd), display_id, data,
+            data_length_large=data_length_large)
 
         if not self.is_opened:
             await self.open()
@@ -232,8 +244,9 @@ class MDCConnection:
         if self.verbose:
             self.verbose('Sent', repr_hex(payload))
 
-        resp = await wait_for_read(self.reader, 4, self.timeout,
-                                   'Response header read timeout')
+        resp = await wait_for_read(
+            self.reader, 5 if response_length_large else 4, self.timeout,
+            'Response header read timeout')
         if not resp:
             raise MDCResponseError('Empty response', resp)
         if resp[0] != HEADER_CODE:
@@ -248,7 +261,12 @@ class MDCConnection:
             raise MDCResponseError('Unexpected display_id',
                                    resp + self.reader._buffer)
 
-        length = resp[3]
+        if response_length_large:
+            length = int.from_bytes(resp[3:5], 'big')
+            data_offset = 5
+        else:
+            length = resp[3]
+            data_offset = 4
         resp += await wait_for_read(self.reader, length + 1, self.timeout,
                                     'Response data read timeout')
         if self.verbose:
@@ -258,7 +276,9 @@ class MDCConnection:
         if checksum != int(resp[-1]):
             raise MDCResponseError('Checksum failed', resp)
 
-        ack, rcmd, data = resp[4], resp[5], resp[6:-1]
+        ack = resp[data_offset]
+        rcmd = resp[data_offset + 1]
+        data = resp[data_offset + 2:-1]
         if ack not in (ACK_CODE, NAK_CODE):
             raise MDCResponseError('Unexpected ACK/NAK', resp)
 

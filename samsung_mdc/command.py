@@ -52,13 +52,17 @@ class Command(metaclass=CommandMcs):
     DATA: List[Union[Type[Enum], Field]]
     RESPONSE_DATA: List[Union[Type[Enum], Field]]
     RESPONSE_EXTRA: List[Union[Type[Enum], Field]]
+    DATA_LENGTH_LARGE: bool = False
+    RESPONSE_LENGTH_LARGE: bool = False
 
     async def __call__(self, connection, display_id, data):
         data = self.parse_response(
             await connection.send(
                 (self.CMD, self.SUBCMD)
                 if self.SUBCMD is not None else self.CMD, display_id,
-                self.pack_payload_data(data) if data else []
+                self.pack_payload_data(data) if data else [],
+                data_length_large=self.DATA_LENGTH_LARGE,
+                response_length_large=self.RESPONSE_LENGTH_LARGE
             ),
         )
         return tuple(self.parse_response_data(data))
